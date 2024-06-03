@@ -36,7 +36,11 @@ void measure_noise_level(void);
 int main() {
     stdio_init_all();
     adc_init();
-    gps_init();
+    if (!gps_init()) {
+        printf("Error: No se pudo inicializar el GPS.\n");
+        return 1;
+    }
+    printf("GPS module initialized. Reading data...\n");
     memory_init();
     led_init();
     button_init();
@@ -75,20 +79,51 @@ void measure_noise_level() {
     noise_level /= 10; // Average value
 
     // Get GPS data
-    char latitude[16], longitude[16];
-    if (!gps_read(latitude, longitude)) {
-        // GPS signal lost
-        led_set_state(LED_YELLOW, 0);
-        led_set_state(LED_RED, 1);
-        sleep_ms(3000);
-        led_set_state(LED_RED, 0);
-        led_set_state(LED_GREEN, 1);
-        return;
+    char buffer[256];
+    bool gps_fix = false;
+    double latitude, longitude;
+
+    while (!gps_fix) {
+        if (uart_is_readable(UART_ID)) {
+            char c = uart_getc(UART_ID);
+            static int index = 0;
+
+            if (c == '\n' || index >= sizeof(buffer) - 1) {
+                buffer[index] = '\0';
+
+                if (strstr(buffer, "$GPGGA") != NULL) {
+                    char time[10], lat[15], ns, lon[15], ew;
+                    int fix_quality;
+                    sscanf(buffer, "$GPGGA,%9[^,],%14[^,],%c,%14[^,],%c,%d", 
+                        time, lat, &ns, lon, &ew, &fix_quality);
+
+                    if (fix_quality > 0) {
+                        latitude = convert_to_decimal(lat, ns);
+                        longitude = convert_to_decimal(lon, ew);
+                        gps_fix = true;
+                    }
+                }
+
+                index = 0;
+            } else {
+                buffer[index++] = c;
+            }
+        }
+
+        if (button_is_pressed()) {
+            // Button pressed during GPS data reading, abort and turn on red LED
+            led_set_state(LED_YELLOW, 0);
+            led_set_state(LED_RED, 1);
+            sleep_ms(3000);
+            led_set_state(LED_RED, 0);
+            led_set_state(LED_GREEN, 1);
+            return;
+        }
     }
 
     // Store data
     char data[64];
-    snprintf(data, sizeof(data), "Noise: %u, Lat: %s, Lon: %s\n", noise_level, latitude, longitude);
+    snprintf(data, sizeof(data), "Noise: %u, Lat: %f, Lon: %f\n", noise_level, latitude, longitude);
     memory_write(data);
 
     // Indicate end of measurement
