@@ -1,26 +1,23 @@
+#include "pico/stdlib.h"
+#include "hardware/uart.h"
+#include "hardware/gpio.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-#include "gps.h"
-
-#define UART_ID uart0 ///<Configuración de UART que se usará
-#define BAUD_RATE 115200  ///<Velocidad de baudios predeterminada del NEO-6M
-#define UART_TX_PIN 12///<Asignación del GPIO para tranmisión
-#define UART_RX_PIN 13///<Asignación del GPIO para Recepción 
-#define PPS_PIN 2
- 
+#define UART_ID uart1
+#define BAUD_RATE 9600
+#define UART_TX_PIN 4
+#define UART_RX_PIN 5
+#define PPS_PIN 9
 
 bool gps_init() {
     uart_init(UART_ID, BAUD_RATE);
     gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
     gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
+    printf("UART initialized\n");
     return uart_is_enabled(UART_ID);
-} 
-
-/**
- * @brief Convierte una coordenada en formato grados y minutos a formato decimal.
- * @param coord La coordenada en formato grados y minutos.
- * @param direction La dirección (N, S, E, W).
- * @return La coordenada en formato decimal.
- */
+}
 
 double convert_to_decimal(const char* coord, char direction) {
     double degrees = 0;
@@ -36,55 +33,47 @@ double convert_to_decimal(const char* coord, char direction) {
 
     double decimal = degrees + (minutes / 60.0);
 
-    ///<Ajustar para hemisferios sur y oeste
     if (direction == 'S' || direction == 'W') {
         decimal = -decimal;
     }
 
     return decimal;
 }
-
-/**
- * @brief Analiza una sentencia GGA del GPS.
- * @param sentence La sentencia GGA a analizar según el protocolo NMEA
- */
-
 void parse_gga_sentence(const char* sentence) {
     char time[10], lat[15], ns, lon[15], ew;
-    int fix_quality;
+    int fix_quality, num_satellites;
+    float hdop, altitude, geoid_sep;
 
-    sscanf(sentence, "$GPGGA,%9[^,],%14[^,],%c,%14[^,],%c,%d", 
-        time, lat, &ns, lon, &ew, &fix_quality);
+    sscanf(sentence, "$GPGGA,%9[^,],%14[^,],%c,%14[^,],%c,%d,%d,%f,%f,M,%f,M", 
+        time, lat, &ns, lon, &ew, &fix_quality, &num_satellites, &hdop, &altitude, &geoid_sep);
+
+    printf("Parsed GGA Sentence: time: %s, lat: %s, ns: %c, lon: %s, ew: %c, fix_quality: %d, num_satellites: %d, hdop: %.2f, altitude: %.2f, geoid_sep: %.2f\n", 
+        time, lat, ns, lon, ew, fix_quality, num_satellites, hdop, altitude, geoid_sep);
 
     if (fix_quality > 0) {
         double latitude = convert_to_decimal(lat, ns);
         double longitude = convert_to_decimal(lon, ew);
         printf("Time: %s, Latitude: %f %c, Longitude: %f %c\n", time, latitude, ns, longitude, ew);
         
-        ///<Construir URL para Google Maps
         char url[100];
         snprintf(url, sizeof(url), "https://www.google.com/maps?q=%f,%f", latitude, longitude);
         printf("Google Maps URL: %s\n", url);
     } else {
-        printf("No GPS fix.\n");
+        printf("No GPS fix. fix_quality: %d\n", fix_quality);
     }
 }
 
-/**
- * @brief Lee los datos del GPS.
-*/
+
 void read_gps_data() {
-    char buffer[256]; ///<Se declara el tamaño del buffer
+    char buffer[256];
     int index = 0;
 
     while (true) {
-        printf("Leyendo UART\n");
         if (uart_is_readable(UART_ID)) {
-            printf("UART listo para leer\n");
             char c = uart_getc(UART_ID);
             if (c == '\n' || index >= sizeof(buffer) - 1) {
                 buffer[index] = '\0';
-                // printf("GPS Data: %s\n", buffer);  ///<Imprime los datos crudos
+                printf("GPS Data: %s\n", buffer);
 
                 if (strstr(buffer, "$GPGGA") != NULL) {
                     parse_gga_sentence(buffer);
@@ -98,22 +87,16 @@ void read_gps_data() {
     }
 }
 
-/**
- * @brief Función principal del programa.
- * @return 0 si el programa se ejecuta correctamente, 1 en caso de error.
-*/
 
 /*
+EJEMPLO DE CÓMO IMPLEMENTAR 
 int main() {
     stdio_init_all();
     if (!gps_init()) {
         printf("Error: No se pudo inicializar el GPS.\n");
-        
     }
-    printf("GPS module initialized. Reading data...\n");   
+    printf("GPS module initialized. Reading data...\n");
     read_gps_data();
-        
-    
 
     return 0;
 }
